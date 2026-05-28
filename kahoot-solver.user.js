@@ -16,6 +16,7 @@
 (() => {
     'use strict';
 
+
     const DEFAULT_MODEL = 'gpt-4o';
     const HIGHLIGHT_STYLE_ID = 'kahoot-solver-style';
     const BADGE_ID = 'kahoot-solver-badge';
@@ -41,6 +42,23 @@
             GM_setValue('openai_api_key', next.trim());
             showBadge(next ? 'API-Key gespeichert' : 'API-Key geloescht', '#4caf50');
         }
+    }
+
+
+    function getQuestionImageUrl() {
+        const selectors = [
+            '[data-functional-selector="question-image"] img',
+            '[data-functional-selector="question-media-image"] img',
+            '[class*="question-media"] img',
+            '[class*="QuestionMedia"] img',
+        ];
+        for (const sel of selectors) {
+            const img = document.querySelector(sel);
+            if (img && img.src && !img.src.startsWith('data:')) {
+                return img.src;
+            }
+        }
+        return null;
     }
 
     function promptForModel() {
@@ -156,15 +174,22 @@
         });
     }
 
-    function askOpenAI(question, answers) {
+    function askOpenAI(question, answers, imageUrl) {
         const apiKey = getApiKey();
         if (!apiKey) {
             showBadge('Kein API-Key. Menue -> API-Key setzen', '#f44336');
             return Promise.reject(new Error('no api key'));
         }
 
-        const sys = 'Du bist ein praeziser Quiz-Solver. Antworte ausschliesslich mit einer JSON-Zeile der Form {"index": <0-basierter Index der richtigen Antwort>, "confidence": <0..1>}. Keine Erklaerung, kein Markdown.';
-        const user = `Frage: ${question}\n\nAntworten:\n${answers.map((a, i) => `${i}: ${a}`).join('\n')}`;
+        const sys = 'Du bist ein praeziser Quiz-Solver. Beziehe das Bild (falls vorhanden) in deine Antwort ein. Antworte ausschliesslich mit einer JSON-Zeile der Form {"index": <0-basierter Index der richtigen Antwort>, "confidence": <0..1>}. Keine Erklaerung, kein Markdown.';
+        const userText = `Frage: ${question}\n\nAntworten:\n${answers.map((a, i) => `${i}: ${a}`).join('\n')}`;
+
+        const userContent = imageUrl
+            ? [
+                { type: 'text', text: userText },
+                { type: 'image_url', image_url: { url: imageUrl } },
+            ]
+            : userText;
 
         const body = {
             model: getModel(),
@@ -172,7 +197,7 @@
             response_format: { type: 'json_object' },
             messages: [
                 { role: 'system', content: sys },
-                { role: 'user', content: user },
+                { role: 'user', content: userContent },
             ],
         };
 
@@ -278,16 +303,17 @@
         const buttons = getAnswerButtons();
         if (!question || buttons.length < 2) return;
         const answers = getAnswerTexts(buttons);
-        if (answers.some(a => !a)) return; 
+        if (answers.some(a => !a)) return;
 
-        const key = question + '||' + answers.join('|');
+        const imageUrl = getQuestionImageUrl();
+        const key = question + '||' + answers.join('|') + '||' + (imageUrl || '');
         if (!force && key === lastSolvedKey) return;
         lastSolvedKey = key;
 
         solving = true;
-        showBadge('Frage erkannt, denke nach...', '#2196f3');
+        showBadge(imageUrl ? 'Frage + Bild erkannt, denke nach...' : 'Frage erkannt, denke nach...', '#2196f3');
         try {
-            const { index, confidence } = await askOpenAI(question, answers);
+            const { index, confidence } = await askOpenAI(question, answers, imageUrl);
             if (index < 0 || index >= buttons.length) {
                 showBadge(`Ungueltiger Index ${index}`, '#f44336');
                 return;
